@@ -1,9 +1,10 @@
 package com.nighthawk.spring_portfolio.mvc.crypto;
-
+import java.util.Map;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
-
+import com.nighthawk.spring_portfolio.mvc.crypto.CryptoUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -275,74 +276,91 @@ public class CryptoController {
         return crypto != null ? crypto.getSymbol() : null;
     }
 
-    private String addOrUpdateCryptoHoldings(String currentCrypto, String cryptoId, double cryptoAmount) {
-        StringBuilder updatedCrypto = new StringBuilder();
-        boolean updated = false;
+   private String addOrUpdateCryptoHoldings(String currentCrypto, String cryptoId, double cryptoAmount) {
+    Map<String, Double> holdings = new HashMap<>();
 
-        if (currentCrypto != null && !currentCrypto.isEmpty()) {
-            String[] holdings = currentCrypto.split(",");
-            for (String holding : holdings) {
-                if (holding.isEmpty()) continue;
+    // Parse existing holdings
+    if (currentCrypto != null && !currentCrypto.isBlank()) {
+        String[] entries = currentCrypto.split(",");
+        for (String entry : entries) {
+            String[] parts = entry.trim().split(":");
+            if (parts.length != 2) continue;
 
-                String[] parts = holding.split(":");
-                if (parts.length != 2) continue;
-
-                String id = parts[0];
-                double amount = Double.parseDouble(parts[1]);
-
-                if (id.equalsIgnoreCase(cryptoId)) {
-                    amount += cryptoAmount;
-                    updated = true;
-                }
-                updatedCrypto.append(id).append(":").append(amount).append(",");
-            }
-        }
-
-        if (!updated) {
-            updatedCrypto.append(cryptoId).append(":").append(cryptoAmount).append(",");
-        }
-
-        return updatedCrypto.toString().replaceAll(",$", "");
-    }
-
-    private String removeOrUpdateCryptoHoldings(String currentCrypto, String cryptoId, double cryptoAmount) {
-        StringBuilder updatedCrypto = new StringBuilder();
-        boolean removed = false;
-    
-        if (currentCrypto != null && !currentCrypto.trim().isEmpty()) {
-            String[] holdings = currentCrypto.split(",");
-            for (String holding : holdings) {
-                if (holding == null || holding.trim().isEmpty()) continue;
-    
-                String[] parts = holding.split(":");
-                if (parts.length != 2) continue;
-    
+            try {
                 String id = parts[0].trim();
                 double amount = Double.parseDouble(parts[1].trim());
-    
-                // Reduce the crypto amount if the ID matches
-                if (id.equalsIgnoreCase(cryptoId)) {
-                    if (amount < cryptoAmount) {
-                        return null; // Insufficient balance to sell
+                if (!id.isEmpty() && amount > 0) {
+                    holdings.put(id, holdings.getOrDefault(id, 0.0) + amount);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+    }
+
+    // Add or update the holding
+    holdings.put(cryptoId, holdings.getOrDefault(cryptoId, 0.0) + cryptoAmount);
+
+    // Rebuild the string and sanitize
+    StringBuilder updated = new StringBuilder();
+    for (Map.Entry<String, Double> entry : holdings.entrySet()) {
+        updated.append(entry.getKey())
+               .append(":")
+               .append(String.format("%.8f", entry.getValue()))
+               .append(",");
+    }
+
+    return CryptoUtils.sanitizeCryptoHoldings(updated.toString());
+}
+
+
+    private String removeOrUpdateCryptoHoldings(String currentCrypto, String cryptoId, double cryptoAmount) {
+        Map<String, Double> holdings = new HashMap<>();
+        boolean found = false;
+
+        if (currentCrypto != null && !currentCrypto.isBlank()) {
+            String[] entries = currentCrypto.split(",");
+            for (String entry : entries) {
+                String[] parts = entry.trim().split(":");
+                if (parts.length != 2) continue;
+
+                try {
+                    String id = parts[0].trim();
+                    double amount = Double.parseDouble(parts[1].trim());
+                    if (!id.isEmpty() && amount > 0) {
+                        holdings.put(id, amount);
                     }
-                    amount -= cryptoAmount;
-                    removed = true;
-                }
-    
-                // Append only non-zero amounts
-                if (amount > 0) {
-                    updatedCrypto.append(id).append(":").append(amount).append(",");
-                }
+                } catch (NumberFormatException ignored) {}
             }
         }
-    
-        if (!removed) {
-            return null; // Crypto ID not found in holdings
+
+        // Validate existence and amount
+        if (!holdings.containsKey(cryptoId)) {
+            return null; // Token not found
         }
-    
-        // Remove trailing comma and return
-        return updatedCrypto.toString().replaceAll(",$", "");
+
+        double currentAmount = holdings.get(cryptoId);
+        if (cryptoAmount > currentAmount) {
+            return null; // Attempting to sell more than owned
+        }
+
+        double newAmount = currentAmount - cryptoAmount;
+        if (newAmount > 0) {
+            holdings.put(cryptoId, newAmount);
+        } else {
+            holdings.remove(cryptoId); // Auto-remove when it hits zero
+        }
+
+        // Rebuild and sanitize
+        StringBuilder updated = new StringBuilder();
+        for (Map.Entry<String, Double> entry : holdings.entrySet()) {
+            updated.append(entry.getKey())
+                .append(":")
+                .append(String.format("%.8f", entry.getValue()))
+                .append(",");
+        }
+
+        return CryptoUtils.sanitizeCryptoHoldings(updated.toString());
     }
+
     
 
     // Inner DTO class for BuyRequest
